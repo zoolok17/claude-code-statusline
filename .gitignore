@@ -1,0 +1,12 @@
+# Runtime/debug artifacts (the script writes these outside the repo, but ignore
+# them here too in case anyone redirects them into the project).
+statusline-last-input.json
+cc-statusline-*.json
+
+# Dependencies / OS / editor noise
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
