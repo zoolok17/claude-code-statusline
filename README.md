@@ -29,28 +29,6 @@ Non-`default` output styles also appear (next to the effort flags).
 
 ## Install
 
-`~/.claude/settings.json` was given:
-
-```json
-"statusLine": {
-  "type": "command",
-  "command": "node D:/Projects/claude/claude-statusbar/statusline.js"
-}
-```
-
-> Use **forward slashes** in the path. On Windows the command may be run through Git Bash,
-> which eats backslashes and would silently blank the bar.
-
-Restart Claude Code (or start a new session). Accept the workspace-trust prompt if shown —
-without trust you get `statusline skipped · restart to fix`. The status line is also
-disabled if `disableAllHooks: true`.
-
-This is a **global** bar (user settings), so it appears in every session, not just this
-project. To make it independent of this folder, copy `statusline.js` to
-`~/.claude/statusline.js` and point the command there instead.
-
-## Install on another machine / share it
-
 It is **not** a Claude Code plugin. Plugins can only contribute the `agent` and
 `subagentStatusLine` settings — *not* the top-level `statusLine` — so a status line can't be
 registered by a plugin; it's a `settings.json` feature. The portable form is this repo plus a
@@ -68,6 +46,22 @@ node install.js          # or: ./install.ps1 (Windows) · ./install.sh (macOS/Li
 existing settings without touching your other keys, and reports if it replaced a previous status
 line. Requires Node (already needed to run the bar). Uninstall by deleting the `statusLine` block
 or running `/statusline delete`.
+
+After installing, restart Claude Code (or start a new session). Accept the workspace-trust prompt
+if shown — without it you get `statusline skipped · restart to fix`. The status line is also
+disabled if `disableAllHooks: true`. It's a **global** bar (user settings), so it appears in every
+session, not just one project.
+
+> **Prefer to configure it by hand?** Add the block below to `~/.claude/settings.json` yourself,
+> using **forward slashes** in the path — on Windows the command may run through Git Bash, which
+> eats backslashes and would silently blank the bar:
+>
+> ```json
+> "statusLine": {
+>   "type": "command",
+>   "command": "node /absolute/path/to/claude-code-statusline/statusline.js"
+> }
+> ```
 
 ## Honest caveats
 
