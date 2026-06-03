@@ -27,7 +27,7 @@ Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░�
 
 Non-`default` output styles also appear (next to the effort flags).
 
-## Install (already done on this machine)
+## Install
 
 `~/.claude/settings.json` was given:
 
