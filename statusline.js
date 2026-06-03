@@ -25,7 +25,9 @@
  *
  * Fields shown (left -> right):
  *   Model · effort/thinking · project ⚡branch · ctx bar + % + tokens ·
- *   $cost +added/-removed duration · 5h%/7d% rate limits
+ *   tokens/$cost +added/-removed in-use-time (elapsed) · 5h%/7d% rate limits
+ * The in-use timer is summed from the transcript across every /resume, so it
+ * survives restarts (cost.total_duration_ms only covers the current run).
  */
 
 const fs = require('fs');
@@ -44,6 +46,13 @@ const C = {
 };
 const paint = (s, color) => (NO_COLOR ? `${s}` : `${color}${s}${C.reset}`);
 const SEP = paint(' · ', C.gray);
+
+// Idle/off threshold for the session "active time" timer (field 5). Any gap
+// between two consecutive transcript events longer than this is treated as
+// "stepped away / shut down" and is excluded from active time (it still counts
+// toward the total-elapsed figure shown in parens). Tune to taste — e.g.
+// 5 * 60 * 1000 for stricter, 30 * 60 * 1000 for looser.
+const IDLE_GAP_MS = 15 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Read the whole stdin payload (small; a synchronous read of fd 0 is reliable).
@@ -130,16 +139,28 @@ function usedTokens(p, limit) {
 }
 
 // ---------------------------------------------------------------------------
-// Cumulative tokens billed this session = input + output + cache_creation +
-// cache_read summed across every assistant turn (this is what produces the API
-// cost; cache reads dominate). Duplicate JSONL lines for one message share a
-// message.id and are written contiguously, so we dedup by skipping a line whose
-// id equals the previous counted one (verified to match full Set-dedup exactly).
-// To stay fast on huge (hundreds-of-MB) transcripts we scan INCREMENTALLY: a
-// tiny per-session cache in the temp dir remembers the byte offset + running
-// total already counted, and each render only reads the newly-appended bytes.
+// Per-session running stats, scanned INCREMENTALLY from the transcript so they
+// stay correct across /resume and stay fast on huge (hundreds-of-MB)
+// transcripts. Claude Code appends resumed turns to the SAME transcript file
+// (same session_id), preserving the original timestamps, so the transcript —
+// not the per-run cost.* fields — is the cross-resume source of truth. A tiny
+// per-session cache in the temp dir remembers the byte offset + everything
+// counted so far; each render reads only the newly-appended bytes. Returns:
+//   tokenTotal — cumulative tokens billed this session (input + output +
+//                cache_creation + cache_read across every assistant turn; this
+//                is what drives the API cost, cache reads dominating). Duplicate
+//                JSONL lines for one message share a message.id and are written
+//                contiguously, so we dedup by skipping a line whose id equals
+//                the previous counted one (matches full Set-dedup exactly).
+//   activeMs   — total time the session was IN USE: the sum of gaps between
+//                consecutive events, EXCLUDING any gap > IDLE_GAP_MS (the spans
+//                it sat closed / you stepped away). Accumulates across every
+//                resume — unlike cost.total_duration_ms, which resets each CLI
+//                run and so only ever shows time since the last resume.
+//   elapsedMs  — wall-clock from the first event ever to the last (off-time
+//                included).
 // ---------------------------------------------------------------------------
-function sessionTokenTotal(p) {
+function sessionStats(p) {
   const tp = p.transcript_path;
   if (!tp) return null;
   let size;
@@ -147,12 +168,16 @@ function sessionTokenTotal(p) {
   const sid = String(p.session_id || path.basename(tp)).replace(/[^A-Za-z0-9._-]/g, '_');
   const cacheFile = path.join(os.tmpdir(), `cc-statusline-${sid}.json`);
 
-  let cache = { offset: 0, total: 0, lastId: null };
+  const FRESH = { v: 2, offset: 0, total: 0, lastId: null, firstTs: null, lastTs: null, activeMs: 0 };
+  let cache = FRESH;
   try {
     const c = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    if (c && typeof c.offset === 'number' && typeof c.total === 'number') cache = c;
+    // v:2 added the timestamp/active-time fields; ignore older caches so they
+    // get a one-time full rescan that rebuilds the timer instead of resuming
+    // at 0 from the current byte offset (which would lose all earlier time).
+    if (c && c.v === 2 && typeof c.offset === 'number' && typeof c.total === 'number') cache = c;
   } catch (_) { /* no/invalid cache -> full scan from 0 */ }
-  if (cache.offset > size) cache = { offset: 0, total: 0, lastId: null }; // transcript shrank / rotated
+  if (cache.offset > size) cache = FRESH; // transcript shrank / rotated
 
   if (cache.offset < size) {
     let text = '';
@@ -164,17 +189,31 @@ function sessionTokenTotal(p) {
         fs.readSync(fd, buf, 0, len, cache.offset);
         text = buf.toString('utf8');
       } finally { fs.closeSync(fd); }
-    } catch (_) { return cache.total || null; }
+    } catch (_) { return (cache.total || cache.firstTs !== null) ? toStats(cache) : null; }
 
     const lastNl = text.lastIndexOf('\n'); // only consume up to a clean line boundary
     if (lastNl >= 0) {
       const consume = text.slice(0, lastNl + 1);
       const newOffset = cache.offset + Buffer.byteLength(consume, 'utf8');
       let total = cache.total, lastId = cache.lastId;
+      let firstTs = cache.firstTs, lastTs = cache.lastTs, activeMs = cache.activeMs;
       for (const line of consume.split(/\r?\n/)) {
         const s = line.trim();
         if (!s) continue;
         let o; try { o = JSON.parse(s); } catch (_) { continue; }
+        // Timer: most line types (user/assistant/attachment/…) carry an ISO
+        // timestamp; mode/permission/snapshot lines don't and are skipped here.
+        if (o && o.timestamp) {
+          const t = Date.parse(o.timestamp);
+          if (!Number.isNaN(t)) {
+            if (firstTs === null) firstTs = t;
+            if (lastTs !== null) {
+              const gap = t - lastTs;
+              if (gap > 0 && gap <= IDLE_GAP_MS) activeMs += gap; // working; off/away gaps dropped
+            }
+            if (lastTs === null || t > lastTs) lastTs = t; // guard against out-of-order lines
+          }
+        }
         if (o && o.type === 'assistant' && o.message && o.message.usage &&
             typeof o.message.usage.input_tokens === 'number') {
           const id = o.message.id || o.requestId || o.uuid || '';
@@ -185,11 +224,19 @@ function sessionTokenTotal(p) {
           lastId = id;
         }
       }
-      cache = { offset: newOffset, total, lastId };
+      cache = { v: 2, offset: newOffset, total, lastId, firstTs, lastTs, activeMs };
       try { fs.writeFileSync(cacheFile, JSON.stringify(cache)); } catch (_) {}
     }
   }
-  return cache.total;
+  return toStats(cache);
+}
+
+function toStats(c) {
+  return {
+    tokenTotal: c.total,
+    activeMs: c.activeMs || 0,
+    elapsedMs: (c.firstTs !== null && c.lastTs !== null) ? Math.max(0, c.lastTs - c.firstTs) : 0,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -222,10 +269,27 @@ function bar(pctUsed, w = 10) {
 }
 function fmtDuration(ms) {
   if (!ms || ms < 0) return '';
-  const t = Math.floor(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const t = Math.floor(ms / 1000);
+  const d = Math.floor(t / 86400), h = Math.floor((t % 86400) / 3600);
+  const m = Math.floor((t % 3600) / 60), s = t % 60;
+  if (d > 0) return `${d}d${h}h`;
   if (h > 0) return `${h}h${m}m`;
   if (m > 0) return `${m}m${String(s).padStart(2, '0')}s`;
   return `${s}s`;
+}
+
+// Field-5 timer: active in-use time (summed across every resume) as the main
+// figure, with total elapsed (off-time included) in parens — but only when it
+// is meaningfully longer, so an uninterrupted session shows a single number.
+// Falls back to this run's wall-clock (cost.total_duration_ms) when there is no
+// transcript to scan.
+function sessionDurationStr(stats, cost) {
+  if (stats && stats.activeMs > 0) {
+    let s = fmtDuration(stats.activeMs);
+    if (stats.elapsedMs - stats.activeMs > 60000) s += ` (${fmtDuration(stats.elapsedMs)})`;
+    return s;
+  }
+  return (cost && fmtDuration(cost.total_duration_ms)) || '';
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +334,8 @@ function main() {
 
   // 5) API tokens used this session + their API cost + lines +/- + duration
   const seg = [];
-  const tokTotal = sessionTokenTotal(p);
+  const stats = sessionStats(p);
+  const tokTotal = stats ? stats.tokenTotal : null;
   const costUsd = (p.cost && typeof p.cost.total_cost_usd === 'number') ? p.cost.total_cost_usd : null;
   if (tokTotal !== null || costUsd !== null) {
     const nr = tokTotal !== null ? fmtTokens(tokTotal) : '?';
@@ -280,9 +345,9 @@ function main() {
   if (p.cost) {
     const add = p.cost.total_lines_added || 0, del = p.cost.total_lines_removed || 0;
     if (add || del) seg.push(`${paint('+' + add, C.green)}${paint('/-' + del, C.red)}`);
-    const dur = fmtDuration(p.cost.total_duration_ms);
-    if (dur) seg.push(paint(dur, C.gray));
   }
+  const dur = sessionDurationStr(stats, p.cost); // active in-use time (+ elapsed), accumulated across resumes
+  if (dur) seg.push(paint(dur, C.gray));
   if (seg.length) parts.push(seg.join(' '));
 
   // 6) Real server-side rate-limit windows (Pro/Max, after the first API call)

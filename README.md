@@ -13,7 +13,7 @@ one line.
 ## What it shows
 
 ```
-Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░░░░░░ 21% ctx (206k/1000k) · API tokens 3.5M/$8.57 +156/-23 2m05s · usage limits used 5h ▓░░░░░ 24% · 7d ▓▓░░░░ 41%
+Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░░░░░░ 21% ctx (206k/1000k) · API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h) · usage limits used 5h ▓░░░░░ 24% · 7d ▓▓░░░░ 41%
 ```
 
 | Segment | Meaning | Source |
@@ -22,7 +22,7 @@ Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░�
 | `e:xhigh think` | Effort level + extended thinking on | `effort.level`, `thinking.enabled` (stdin) |
 | `godot-mcp ⚡main*` | Project folder + git branch (`*` = uncommitted changes) | `workspace.current_dir` + `git` |
 | `▓▓░░░░░░░░ 21% ctx (206k/1000k)` | Context **used** % — bar and number both rise as context fills (green→yellow→red) + tokens used / window | `context_window` (stdin) → transcript fallback |
-| `API tokens 3.5M/$8.57 +156/-23 2m05s` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · lines added/removed by edits · wall-clock | transcript (tokens) + `cost.total_cost_usd` (stdin) |
+| `API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h)` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · lines added/removed by edits · **in-use time** (`elapsed` in parens) | transcript (tokens + timer) + `cost.total_cost_usd` (stdin) |
 | `usage limits used 5h ▓░░░░░ 24% · 7d ▓▓░░░░ 41%` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) | `rate_limits.*` (stdin) |
 
 Non-`default` output styles also appear (next to the effort flags).
@@ -85,6 +85,14 @@ or running `/statusline delete`.
   re-billed on **every turn** — that's exactly what drives the cost. It's computed incrementally (a
   small per-session cache in the temp dir scans only newly-appended transcript bytes), so it stays
   fast even on multi-hundred-MB transcripts.
+- **In-use timer** — the duration (`13h2m (2d3h)`) is **not** `cost.total_duration_ms`: that field
+  only covers the current CLI run, so it resets to near-zero every time you `/resume` an old session.
+  Instead the timer is reconstructed from the transcript, which Claude Code appends to across resumes
+  (same `session_id`, original timestamps preserved). The main figure is **active in-use time** — the
+  sum of gaps between consecutive events, *excluding* any gap longer than `IDLE_GAP_MS` (default 15 min)
+  so the hours it sat closed don't count. The parenthesised figure is **total elapsed** (first event →
+  last, off-time included), shown only when it is meaningfully longer. Tune `IDLE_GAP_MS` near the top
+  of `statusline.js`; if there is no transcript to scan it falls back to `cost.total_duration_ms`.
 - **Daily / burn-rate cost** — not provided by Claude Code. If you want it, switch the
   command to [`ccusage`](https://github.com/ryoppippi/ccusage):
   `npx -y ccusage@latest statusline --cost-source cc --visual-burn-rate emoji-text`
@@ -115,4 +123,7 @@ Get-Content .tests/a-full-1m.json -Raw | node statusline.js
 ```
 
 Covered: full 1M payload, minimal payload, empty stdin, real-transcript fallback, and the
-`used_percentage` fallback path.
+`used_percentage` fallback path. `f-resume-timer.json` exercises the cross-resume timer — it
+points at the committed `.tests/sample-transcript.jsonl` (a tiny session with an overnight gap)
+and should print `… +42/-7 5m00s (1d1h)`: 5 minutes of actual work spread across a calendar day.
+Run it from the repo root so the relative `transcript_path` resolves.

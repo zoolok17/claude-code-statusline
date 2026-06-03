@@ -1,0 +1,1 @@
+{"model":{"id":"claude-opus-4-8[1m]","display_name":"Opus 4.8 (1M context)"},"workspace":{"current_dir":"D:/Projects/claude/claude-code-statusline"},"session_id":"sample-resume-timer","transcript_path":".tests/sample-transcript.jsonl","effort":{"level":"xhigh"},"cost":{"total_cost_usd":1.50,"total_duration_ms":120000,"total_lines_added":42,"total_lines_removed":7}}

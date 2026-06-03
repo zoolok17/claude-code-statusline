@@ -1,0 +1,6 @@
+{"type":"mode","sessionId":"sample"}
+{"type":"user","timestamp":"2026-01-01T09:00:00.000Z","sessionId":"sample"}
+{"type":"assistant","timestamp":"2026-01-01T09:01:00.000Z","sessionId":"sample","message":{"id":"m1","usage":{"input_tokens":1200,"output_tokens":300,"cache_read_input_tokens":40000,"cache_creation_input_tokens":800}}}
+{"type":"user","timestamp":"2026-01-01T09:03:00.000Z","sessionId":"sample"}
+{"type":"user","timestamp":"2026-01-02T10:00:00.000Z","sessionId":"sample"}
+{"type":"assistant","timestamp":"2026-01-02T10:02:00.000Z","sessionId":"sample","message":{"id":"m2","usage":{"input_tokens":900,"output_tokens":250,"cache_read_input_tokens":52000,"cache_creation_input_tokens":600}}}
