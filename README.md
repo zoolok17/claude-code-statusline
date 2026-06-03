@@ -109,9 +109,9 @@ which segments appear are all in `main()`. Set the `NO_COLOR` env var to disable
 colors. Add `"refreshInterval": 5` (seconds) inside the `statusLine` block if you want the
 bar to also tick on a timer while idle (e.g. for a clock or live burn rate).
 
-Each run writes the raw stdin payload to `~/.claude/statusline-last-input.json` — inspect
-it to see exactly which fields your Claude Code version sends, then extend the bar. (Delete
-the `dumpDebug` call body to turn this off.)
+Set `CC_STATUSLINE_DEBUG=1` to dump each run's raw stdin payload to
+`~/.claude/statusline-last-input.json` — inspect it to see exactly which fields your Claude
+Code version sends, then extend the bar. (Off by default, so a normal render writes nothing.)
 
 ## Tests
 

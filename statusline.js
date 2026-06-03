@@ -63,7 +63,8 @@ function readStdin() {
 
 // Best-effort: dump the raw payload so the exact schema this Claude Code
 // version sends can be inspected (handy for debugging / extending the bar).
-// Harmless and tiny; comment out the body to disable.
+// Opt-in: gated behind CC_STATUSLINE_DEBUG at the call site, so a normal render
+// performs no disk write.
 function dumpDebug(raw) {
   try {
     fs.writeFileSync(path.join(os.homedir(), '.claude', 'statusline-last-input.json'), raw || '');
@@ -301,7 +302,7 @@ function sessionDurationStr(stats, cost) {
 // ---------------------------------------------------------------------------
 function main() {
   const raw = readStdin();
-  dumpDebug(raw);
+  if (process.env.CC_STATUSLINE_DEBUG) dumpDebug(raw); // opt-in raw-payload dump
   let p = {};
   if (raw.trim()) { try { p = JSON.parse(raw); } catch (_) { p = {}; } }
 
