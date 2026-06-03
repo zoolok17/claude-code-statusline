@@ -284,7 +284,11 @@ function fmtDuration(ms) {
 // Falls back to this run's wall-clock (cost.total_duration_ms) when there is no
 // transcript to scan.
 function sessionDurationStr(stats, cost) {
-  if (stats && stats.activeMs > 0) {
+  if (stats && (stats.activeMs > 0 || stats.elapsedMs > 0)) {
+    // Sparse session — every turn spaced beyond IDLE_GAP_MS, so active rounds to
+    // ~0: lead with elapsed rather than an uninformative "0s" or, worse, the
+    // per-run cost fallback that this resume-aware field exists to replace.
+    if (stats.activeMs < 1000) return fmtDuration(stats.elapsedMs);
     let s = fmtDuration(stats.activeMs);
     if (stats.elapsedMs - stats.activeMs > 60000) s += ` (${fmtDuration(stats.elapsedMs)})`;
     return s;
