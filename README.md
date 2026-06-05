@@ -13,7 +13,7 @@ one line.
 ## What it shows
 
 ```
-Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░░░░░░ 21% ctx (206k/1000k) · API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h) · usage limits used 5h ▓░░░░░ 24% · 7d ▓▓░░░░ 41%
+Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░░░░░░ 21% ctx (206k/1000k) · API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h) · usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓░░░░ 41% / Tue 09:00
 ```
 
 | Segment | Meaning | Source |
@@ -23,7 +23,7 @@ Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░�
 | `godot-mcp ⚡main*` | Project folder + git branch (`*` = uncommitted changes) | `workspace.current_dir` + `git` |
 | `▓▓░░░░░░░░ 21% ctx (206k/1000k)` | Context **used** % — bar and number both rise as context fills (green→yellow→red) + tokens used / window | `context_window` (stdin) → transcript fallback |
 | `API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h)` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · lines added/removed by edits · **in-use time** (`elapsed` in parens) | transcript (tokens + timer) + `cost.total_cost_usd` (stdin) |
-| `usage limits used 5h ▓░░░░░ 24% · 7d ▓▓░░░░ 41%` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) | `rate_limits.*` (stdin) |
+| `usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓░░░░ 41% / Tue 09:00` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) and, after the `/`, the local time the window resets (weekday shown when not today) | `rate_limits.*` (stdin) |
 
 Non-`default` output styles also appear (next to the effort flags).
 

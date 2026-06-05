@@ -268,6 +268,17 @@ function bar(pctUsed, w = 10) {
   const f = Math.max(0, Math.min(w, Math.round((pctUsed / 100) * w)));
   return '▓'.repeat(f) + '░'.repeat(w - f);
 }
+// Rate-limit reset moment (epoch seconds) -> compact local time:
+// today -> "17:00", another day -> "Tue 09:00".
+function fmtReset(epochSec) {
+  if (typeof epochSec !== 'number' || epochSec <= 0) return '';
+  const d = new Date(epochSec * 1000);
+  if (isNaN(d.getTime())) return '';
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (d.toDateString() === new Date().toDateString()) return hm;
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return `${days[d.getDay()]} ${hm}`;
+}
 function fmtDuration(ms) {
   if (!ms || ms < 0) return '';
   const t = Math.floor(ms / 1000);
@@ -361,7 +372,9 @@ function main() {
       if (!w || typeof w.used_percentage !== 'number') return null;
       const u = Math.max(0, Math.min(100, w.used_percentage)); // fraction of the limit consumed
       const c = usageColor(u);                                 // green low -> red high (higher used = worse)
-      return `${label} ${paint(bar(u, 6), c)} ${paint(Math.round(u) + '%', c)}`;
+      const reset = fmtReset(w.resets_at);                     // when this window resets (local time)
+      return `${label} ${paint(bar(u, 6), c)} ${paint(Math.round(u) + '%', c)}` +
+             (reset ? ` ${paint('/ ' + reset, C.dim)}` : '');
     };
     const segs = [win('5h', p.rate_limits.five_hour), win('7d', p.rate_limits.seven_day)].filter(Boolean);
     if (segs.length) parts.push(paint('usage limits used', C.gray) + ' ' + segs.join(SEP));
