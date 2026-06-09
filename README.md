@@ -100,8 +100,11 @@ session, not just one project.
 - **agenttalk roster** — read straight from the project's `.agenttalk/` store (no `agenttalk`
   CLI is spawned), so the segment costs nothing when you're not on a team and just appears when
   you are. `●`/`○` reflect heartbeat **recency** (`AGENTTALK_LIVE_MS`, default 2 min) — heartbeats
-  advance on bus activity, so `○` means "quiet on the bus," not "process dead." Identity comes from
-  `AGENTTALK_SELF` (defaults to `claude`). The reverse link also matters: agenttalk's `capacity`
+  advance on bus activity, so `○` means "quiet on the bus," not "process dead." The starred name is
+  read from `AGENTTALK_SELF` — **set it in each window** (as agenttalk itself requires); when several
+  agents share a project and a window has no `AGENTTALK_SELF`, it can't be identified, so **no** name
+  is starred rather than mislabeling it (a lone-agent roster is starred unambiguously). The reverse
+  link also matters: agenttalk's `capacity`
   reads `~/.claude/statusline-last-input.json`, so a Claude worker who wants teammates to see its
   usage snapshot must run with `CC_STATUSLINE_DEBUG=1` (see *Customize*).
 

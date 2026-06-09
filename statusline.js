@@ -293,7 +293,13 @@ function agenttalkInfo(cwd) {
   const cfg = readJson(path.join(root, 'config.json'));
   const agents = cfg && Array.isArray(cfg.agents) ? cfg.agents.filter((a) => typeof a === 'string') : [];
   if (!agents.length) return null;
-  const self = process.env.AGENTTALK_SELF || 'claude'; // team convention; defaults to "claude"
+  // Identity MUST match how agenttalk itself resolves it: $AGENTTALK_SELF. There
+  // is no other reliable per-window signal (the store keys everything by agent
+  // name, not by Claude session), so we never guess a name — defaulting to
+  // "claude" would mislabel a second Claude window such as "claude-reviewer". A
+  // single-agent roster is unambiguous; with several, self stays unknown (no
+  // star) until that window exports AGENTTALK_SELF.
+  const self = process.env.AGENTTALK_SELF || (agents.length === 1 ? agents[0] : null);
   const stateDir = path.join(root, 'state');
   const now = Date.now();
 
@@ -302,19 +308,19 @@ function agenttalkInfo(cwd) {
     const hb = Date.parse(readTrim(path.join(stateDir, `${a}.heartbeat`)));
     live[a] = !Number.isNaN(hb) && now - hb <= AGENTTALK_LIVE_MS;
   }
-  // Are we currently blocked in an `agenttalk wait`? (waiting file present and
-  // its deadline, if any, not yet passed.)
-  let waiting = false;
-  const w = readJson(path.join(stateDir, `${self}.waiting`));
-  if (w) {
-    const dl = typeof w.deadline_epoch === 'number' ? w.deadline_epoch * 1000 : null;
-    waiting = dl === null || dl > now;
-  }
-  // How many threads we track are still open (unresolved).
-  let openThreads = 0;
-  const ts = readJson(path.join(stateDir, `${self}.threadstate.json`));
-  if (ts && typeof ts === 'object') {
-    for (const k of Object.keys(ts)) if (ts[k] && ts[k].closed === false) openThreads++;
+  // Self-specific status, only meaningful once we know who we are: are we blocked
+  // in an `agenttalk wait`, and how many tracked threads are still open?
+  let waiting = false, openThreads = 0;
+  if (self) {
+    const w = readJson(path.join(stateDir, `${self}.waiting`));
+    if (w) {
+      const dl = typeof w.deadline_epoch === 'number' ? w.deadline_epoch * 1000 : null;
+      waiting = dl === null || dl > now;
+    }
+    const ts = readJson(path.join(stateDir, `${self}.threadstate.json`));
+    if (ts && typeof ts === 'object') {
+      for (const k of Object.keys(ts)) if (ts[k] && ts[k].closed === false) openThreads++;
+    }
   }
   return { agents, self, live, waiting, openThreads };
 }
