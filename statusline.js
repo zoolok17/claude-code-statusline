@@ -54,6 +54,11 @@ const SEP = paint(' · ', C.gray);
 // 5 * 60 * 1000 for stricter, 30 * 60 * 1000 for looser.
 const IDLE_GAP_MS = 15 * 60 * 1000;
 
+// agenttalk roster segment: a peer counts as "live" (●) when its heartbeat is
+// newer than this, else "stale" (○). Heartbeats only advance on agenttalk
+// activity, so this is "recently active on the bus", not "process alive".
+const AGENTTALK_LIVE_MS = 2 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Read the whole stdin payload (small; a synchronous read of fd 0 is reliable).
 // ---------------------------------------------------------------------------
@@ -259,6 +264,62 @@ function gitInfo(dir) {
 }
 
 // ---------------------------------------------------------------------------
+// agenttalk team state (https://github.com/.../agenttalk). When the project is
+// part of an agenttalk team it keeps a small plain-text store at
+// `<root>/.agenttalk/`; we read it DIRECTLY (no spawning the Python CLI on the
+// hot path) to show the roster, this window's place in it, peer liveness, and
+// our own waiting / open-thread status. Returns null when the project has no
+// such store — i.e. the segment is silent for every non-agenttalk project.
+// ---------------------------------------------------------------------------
+function readTrim(file) { try { return fs.readFileSync(file, 'utf8').trim(); } catch (_) { return ''; } }
+function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
+function findAgenttalkDir(startDir) {
+  let dir = startDir;
+  for (let i = 0; i < 6 && dir; i++) { // walk up to the repo/store root
+    const at = path.join(dir, '.agenttalk');
+    try { if (fs.statSync(path.join(at, 'config.json')).isFile()) return at; } catch (_) {}
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // reached filesystem root
+    dir = parent;
+  }
+  return null;
+}
+
+function agenttalkInfo(cwd) {
+  if (!cwd) return null;
+  const root = findAgenttalkDir(cwd);
+  if (!root) return null; // not an agenttalk project -> segment omitted
+  const cfg = readJson(path.join(root, 'config.json'));
+  const agents = cfg && Array.isArray(cfg.agents) ? cfg.agents.filter((a) => typeof a === 'string') : [];
+  if (!agents.length) return null;
+  const self = process.env.AGENTTALK_SELF || 'claude'; // team convention; defaults to "claude"
+  const stateDir = path.join(root, 'state');
+  const now = Date.now();
+
+  const live = {};
+  for (const a of agents) {
+    const hb = Date.parse(readTrim(path.join(stateDir, `${a}.heartbeat`)));
+    live[a] = !Number.isNaN(hb) && now - hb <= AGENTTALK_LIVE_MS;
+  }
+  // Are we currently blocked in an `agenttalk wait`? (waiting file present and
+  // its deadline, if any, not yet passed.)
+  let waiting = false;
+  const w = readJson(path.join(stateDir, `${self}.waiting`));
+  if (w) {
+    const dl = typeof w.deadline_epoch === 'number' ? w.deadline_epoch * 1000 : null;
+    waiting = dl === null || dl > now;
+  }
+  // How many threads we track are still open (unresolved).
+  let openThreads = 0;
+  const ts = readJson(path.join(stateDir, `${self}.threadstate.json`));
+  if (ts && typeof ts === 'object') {
+    for (const k of Object.keys(ts)) if (ts[k] && ts[k].closed === false) openThreads++;
+  }
+  return { agents, self, live, waiting, openThreads };
+}
+
+// ---------------------------------------------------------------------------
 // Formatting helpers.
 // ---------------------------------------------------------------------------
 const fmtK = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k' : String(n));
@@ -365,6 +426,22 @@ function main() {
   const dur = sessionDurationStr(stats, p.cost); // active in-use time (+ elapsed), accumulated across resumes
   if (dur) seg.push(paint(dur, C.gray));
   if (seg.length) parts.push(seg.join(' '));
+
+  // 5b) agenttalk team: roster + this window's place/liveness/status. Silent
+  // for every project that isn't part of an agenttalk team.
+  const team = agenttalkInfo(cwd);
+  if (team) {
+    const roster = team.agents.map((a) => {
+      const isSelf = a === team.self;
+      const dot = team.live[a] ? '●' : '○';
+      const label = dot + (isSelf ? `${a}*` : a); // own window marked with *
+      return paint(label, isSelf ? C.cyan + C.bold : team.live[a] ? C.gray : C.dim);
+    }).join(paint('·', C.gray));
+    let status = '';
+    if (team.waiting) status += ' ' + paint('⏳', C.yellow);            // we're blocked in a wait
+    if (team.openThreads > 0) status += ' ' + paint('✉' + team.openThreads, C.magenta); // open threads
+    parts.push(paint('🛰', C.gray) + ' ' + roster + status);
+  }
 
   // 6) Real server-side rate-limit windows (Pro/Max, after the first API call)
   if (p.rate_limits) {

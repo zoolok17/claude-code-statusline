@@ -24,8 +24,10 @@ Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░�
 | `▓▓░░░░░░░░ 21% ctx (206k/1000k)` | Context **used** % — bar and number both rise as context fills (green→yellow→red) + tokens used / window | `context_window` (stdin) → transcript fallback |
 | `API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h)` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · lines added/removed by edits · **in-use time** (`elapsed` in parens) | transcript (tokens + timer) + `cost.total_cost_usd` (stdin) |
 | `usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓░░░░ 41% / Tue 09:00` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) and, after the `/`, the local time the window resets (weekday shown when not today) | `rate_limits.*` (stdin) |
+| `🛰 ●claude*·○codex ⏳ ✉2` | **[agenttalk](https://github.com/zoolok17/agenttalk) team** — *only* in a project with a `.agenttalk/` store: the roster with **this window starred** (`AGENTTALK_SELF`), `●`/`○` = live/stale heartbeat (recent bus activity), trailing `⏳` = you're blocked in a `wait`, `✉N` = open threads | `.agenttalk/` store (local files) |
 
-Non-`default` output styles also appear (next to the effort flags).
+Non-`default` output styles also appear (next to the effort flags). The agenttalk segment is
+shown only inside an agenttalk team project; every other project never sees it.
 
 ## Install
 
@@ -95,6 +97,13 @@ session, not just one project.
 - **1M context** — the 200k-vs-1M window is detected from stdin (`context_window_size`,
   `model.id` `[1m]` marker, or `exceeds_200k_tokens`); the transcript's model string lacks
   the marker, so the limit is never derived from it.
+- **agenttalk roster** — read straight from the project's `.agenttalk/` store (no `agenttalk`
+  CLI is spawned), so the segment costs nothing when you're not on a team and just appears when
+  you are. `●`/`○` reflect heartbeat **recency** (`AGENTTALK_LIVE_MS`, default 2 min) — heartbeats
+  advance on bus activity, so `○` means "quiet on the bus," not "process dead." Identity comes from
+  `AGENTTALK_SELF` (defaults to `claude`). The reverse link also matters: agenttalk's `capacity`
+  reads `~/.claude/statusline-last-input.json`, so a Claude worker who wants teammates to see its
+  usage snapshot must run with `CC_STATUSLINE_DEBUG=1` (see *Customize*).
 
 ## Customize
 
