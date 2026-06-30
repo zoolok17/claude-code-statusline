@@ -24,7 +24,7 @@ Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░�
 | `▓▓░░░░░░░░ 21% ctx (206k/1000k)` | Context **used** % — bar and number both rise as context fills (green→yellow→red) + tokens used / window | `context_window` (stdin) → transcript fallback |
 | `API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h)` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · lines added/removed by edits · **in-use time** (`elapsed` in parens) | transcript (tokens + timer) + `cost.total_cost_usd` (stdin) |
 | `usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓░░░░ 41% / Tue 09:00` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) and, after the `/`, the local time the window resets (weekday shown when not today) | `rate_limits.*` (stdin) |
-| `🛰 ●claude*·○codex ⏳ ✉2` | **[agenttalk](https://github.com/zoolok17/agenttalk) team** — *only* in a project with a `.agenttalk/` store: the roster with **this window starred** (`AGENTTALK_SELF`), `●`/`○` = live/stale heartbeat (recent bus activity), trailing `⏳` = you're blocked in a `wait`, `✉N` = open threads | `.agenttalk/` store (local files) |
+| `🛰 claude-reviewer (reviewer) @reviewers/9 ✉2` | **[agenttalk](https://github.com/zoolok17/agenttalk) identity** — *only* in a project with a `.agenttalk/` store: **this window's own agent** — name (`AGENTTALK_SELF`), role, and the group(s) + total roster size it belongs to (`@group/N`), plus `⏳` (blocked in a `wait`) / `✉N` (open threads). Shows `?/N` when identity is unset in a multi-agent roster | `.agenttalk/` store (local files) |
 
 Non-`default` output styles also appear (next to the effort flags). The agenttalk segment is
 shown only inside an agenttalk team project; every other project never sees it.
@@ -97,16 +97,16 @@ session, not just one project.
 - **1M context** — the 200k-vs-1M window is detected from stdin (`context_window_size`,
   `model.id` `[1m]` marker, or `exceeds_200k_tokens`); the transcript's model string lacks
   the marker, so the limit is never derived from it.
-- **agenttalk roster** — read straight from the project's `.agenttalk/` store (no `agenttalk`
-  CLI is spawned), so the segment costs nothing when you're not on a team and just appears when
-  you are. `●`/`○` reflect heartbeat **recency** (`AGENTTALK_LIVE_MS`, default 2 min) — heartbeats
-  advance on bus activity, so `○` means "quiet on the bus," not "process dead." The starred name is
-  read from `AGENTTALK_SELF` — **set it in each window** (as agenttalk itself requires); when several
-  agents share a project and a window has no `AGENTTALK_SELF`, it can't be identified, so **no** name
-  is starred rather than mislabeling it (a lone-agent roster is starred unambiguously). The reverse
-  link also matters: agenttalk's `capacity`
-  reads `~/.claude/statusline-last-input.json`, so a Claude worker who wants teammates to see its
-  usage snapshot must run with `CC_STATUSLINE_DEBUG=1` (see *Customize*).
+- **agenttalk identity** — read straight from the project's `.agenttalk/config.json` (no `agenttalk`
+  CLI is spawned), so it costs nothing off-team and just appears on-team. It shows **only this
+  window's own agent** — name from `AGENTTALK_SELF`, role and group(s) from the store's `roles` and
+  `groups` maps, and the total roster size after the `/` (`@group/N`, or `@-/N` when you're in no
+  group). **Set `AGENTTALK_SELF` in each window** (as agenttalk itself requires); when several agents
+  share a project and a window has no `AGENTTALK_SELF`, it can't be identified, so it shows `?/N`
+  rather than mislabel itself (a lone-agent roster is unambiguous). `⏳` = blocked in a `wait`,
+  `✉N` = open threads. The reverse link also matters: agenttalk's `capacity` reads
+  `~/.claude/statusline-last-input.json`, so a Claude worker who wants teammates to see its usage
+  snapshot must run with `CC_STATUSLINE_DEBUG=1` (see *Customize*).
 
 ## Customize
 
