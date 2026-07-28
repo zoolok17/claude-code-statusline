@@ -19,15 +19,18 @@ Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░�
 | Segment | Meaning | Source |
 | --- | --- | --- |
 | `Opus 4.8 (1M context)` | Model in use | `model.display_name` (stdin) |
-| `e:xhigh think` | Effort level + extended thinking on | `effort.level`, `thinking.enabled` (stdin) |
+| `e:xhigh think fast` | Effort level + extended thinking on + fast mode | `effort.level`, `thinking.enabled`, `fast_mode` (stdin) |
 | `godot-mcp ⚡main*` | Project folder + git branch (`*` = uncommitted changes) | `workspace.current_dir` + `git` |
 | `▓▓░░░░░░░░ 21% ctx (206k/1000k)` | Context **used** % — bar and number both rise as context fills (green→yellow→red) + tokens used / window | `context_window` (stdin) → transcript fallback |
 | `API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h)` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · lines added/removed by edits · **in-use time** (`elapsed` in parens) | transcript (tokens + timer) + `cost.total_cost_usd` (stdin) |
 | `usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓░░░░ 41% / Tue 09:00` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) and, after the `/`, the local time the window resets (weekday shown when not today) | `rate_limits.*` (stdin) |
 | `🛰 claude-reviewer (reviewer) @reviewers/9 ✉2` | **[agenttalk](https://github.com/zoolok17/agenttalk) identity** — *only* in a project with a `.agenttalk/` store: **this window's own agent** — name (`AGENTTALK_SELF`), role, and the group(s) + total roster size it belongs to (`@group/N`), plus `⏳` (blocked in a `wait`) / `✉N` (open threads). Shows `?/N` when identity is unset in a multi-agent roster | `.agenttalk/` store (local files) |
 
-Non-`default` output styles also appear (next to the effort flags). The agenttalk segment is
-shown only inside an agenttalk team project; every other project never sees it.
+Non-`default` output styles also appear (next to the effort flags). `fast` shows up there only
+while `/fast` is on, in yellow rather than the usual magenta: it is the same model at a premium
+per-token rate, so the `$` figure further along the bar is not comparable to a standard-speed
+session. The effort flag itself is absent on models that have no effort setting (Haiku), and the
+agenttalk segment is shown only inside an agenttalk team project; every other project never sees it.
 
 ## Install
 
@@ -94,9 +97,14 @@ session, not just one project.
   `npx -y ccusage@latest statusline --cost-source cc --visual-burn-rate emoji-text`
   (its 5h-block and weekly figures are *local token-count estimates*, not the official
   limits). `npm i -g ccusage` first to avoid the per-render download.
-- **1M context** — the 200k-vs-1M window is detected from stdin (`context_window_size`,
-  `model.id` `[1m]` marker, or `exceeds_200k_tokens`); the transcript's model string lacks
-  the marker, so the limit is never derived from it.
+- **Context window** — the size comes from stdin's `context_window_size`, which Claude Code
+  always sends; the transcript's model string carries no window information, so the limit is
+  never derived from it. Only if that field is missing does the bar fall back to inferring the
+  window: `[1m]` in `model.id` or `exceeds_200k_tokens` mean 1M, otherwise it reads the model
+  family and version. **Note that `[1m]` is only one of the routes to a 1M window** — since the
+  4.6 generation most models are *natively* 1M and carry no marker at all (a real payload here
+  read `claude-opus-4-8`, `exceeds_200k_tokens: false`, `context_window_size: 1000000`), so the
+  fallback treats Haiku and pre-4.6 models as 200k and everything newer or unrecognised as 1M.
 - **agenttalk identity** — read straight from the project's `.agenttalk/config.json` (no `agenttalk`
   CLI is spawned), so it costs nothing off-team and just appears on-team. It shows **only this
   window's own agent** — name from `AGENTTALK_SELF`, role and group(s) from the store's `roles` and
@@ -129,7 +137,10 @@ Get-Content .tests/a-full-1m.json -Raw | node statusline.js
 ```
 
 Covered: full 1M payload, minimal payload, empty stdin, real-transcript fallback, and the
-`used_percentage` fallback path. `f-resume-timer.json` exercises the cross-resume timer — it
+`used_percentage` fallback path. `g-native-1m-fast.json` covers a natively-1M model with no
+`[1m]` marker and no `context_window_size`, plus fast mode — it should print
+`Opus 5 · e:xhigh think fast · opus5-fast · ▓▓▓░░░░░░░ 30% ctx (300k/1000k)` (a 200k denominator
+there would mean the window inference regressed). `f-resume-timer.json` exercises the cross-resume timer — it
 points at the committed `.tests/sample-transcript.jsonl` (a tiny session with an overnight gap)
 and should print `… +42/-7 5m00s (1d1h)`: 5 minutes of actual work spread across a calendar day.
 Run it from the repo root so the relative `transcript_path` resolves.

@@ -24,7 +24,7 @@
  *     real 200k and 1M-context transcripts.
  *
  * Fields shown (left -> right):
- *   Model · effort/thinking · project ⚡branch · ctx bar + % + tokens ·
+ *   Model · effort/thinking/fast · project ⚡branch · ctx bar + % + tokens ·
  *   tokens/$cost +added/-removed in-use-time (elapsed) · 5h%/7d% rate limits
  * The in-use timer is summed from the transcript across every /resume, so it
  * survives restarts (cost.total_duration_ms only covers the current run).
@@ -73,17 +73,44 @@ function dumpDebug(raw) {
 
 // ---------------------------------------------------------------------------
 // Context window: limit + tokens used.
-// The 1M tier is NOT visible in the transcript's model string, so the limit
-// comes from stdin: prefer the authoritative context_window_size, else infer
-// from model.id "[1m]" / exceeds_200k_tokens.
+// The window is NOT visible in the transcript's model string, so the limit comes
+// from stdin: prefer the authoritative context_window_size (Claude Code always
+// sends it), else infer it from the model id.
+//
+// The `[1m]` suffix is only ONE of the ways Claude Code arrives at a 1M window.
+// Since the 4.6 generation most models are NATIVELY 1M and carry no marker at
+// all — a real payload from this machine read `id: "claude-opus-4-8"`,
+// `exceeds_200k_tokens: false`, `context_window_size: 1000000` — so the fallback
+// must not read "no marker" as 200k, or it under-reports the window 5x and the
+// bar screams red at a fifth of the real usage.
 // ---------------------------------------------------------------------------
 function resolveLimit(p) {
   const cw = p.context_window;
   if (cw && typeof cw.context_window_size === 'number' && cw.context_window_size > 0) {
-    return cw.context_window_size;
+    return cw.context_window_size;                                          // authoritative
   }
   const id = (p.model && p.model.id) || '';
-  return (/\[1m\]/i.test(id) || p.exceeds_200k_tokens === true) ? 1000000 : 200000;
+  if (/\[1m\]/i.test(id) || p.exceeds_200k_tokens === true) return 1000000;  // explicit 1M markers
+  return nativeLimit(id);
+}
+
+// Best-effort model -> context window, used only when stdin omits the real size.
+// 1M arrived with the 4.6 generation, so only Haiku and the pre-4.6 models are
+// 200k; anything newer or unrecognised is assumed 1M, since that is where the
+// entire current lineup sits and context windows only ever grow. Tolerates
+// provider-prefixed ids (e.g. "us.anthropic.claude-opus-5").
+function nativeLimit(id) {
+  if (!id) return 200000;                            // nothing to go on
+  if (/haiku/i.test(id)) return 200000;              // every Haiku to date
+  if (/claude-\d/i.test(id)) return 200000;          // legacy "claude-3-7-sonnet-…" naming, all 200k
+  // "opus-4-8", "sonnet-5", "opus-4" — the 1-2 digit guard keeps the date suffix
+  // of "claude-opus-4-20250514" from reading as minor version 20250514.
+  const m = /(opus|sonnet)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)/i.exec(id);
+  if (m) {
+    const major = Number(m[2]), minor = Number(m[3] || 0);
+    return (major > 4 || (major === 4 && minor >= 6)) ? 1000000 : 200000;
+  }
+  return 1000000;                                    // unrecognised -> current-generation default
 }
 
 // Tokens in context = input + cache_read + cache_creation (output_tokens is the
@@ -385,13 +412,21 @@ function main() {
   // 1) Model
   parts.push(paint(`${(p.model && p.model.display_name) || 'Claude'}`, C.cyan + C.bold));
 
-  // 2) Effort + thinking + non-default output style
+  // 2) Effort + thinking + fast mode + non-default output style.
+  // `effort` is absent for models that don't support it (e.g. Haiku), so the
+  // whole group is optional.
   const eff = p.effort && p.effort.level;          // low|medium|high|xhigh|max (xhigh == ultracode)
   const flags = [];
-  if (eff) flags.push(`e:${eff}`);
-  if (p.thinking && p.thinking.enabled) flags.push('think');
-  if (p.output_style && p.output_style.name && p.output_style.name !== 'default') flags.push(p.output_style.name);
-  if (flags.length) parts.push(paint(flags.join(' '), C.magenta));
+  if (eff) flags.push(paint(`e:${eff}`, C.magenta));
+  if (p.thinking && p.thinking.enabled) flags.push(paint('think', C.magenta));
+  // Fast mode (/fast, Opus 5 / 4.8) is the same model at a premium per-token
+  // rate, so it is painted apart from the other flags: it silently changes what
+  // the $ figure in field 5 means. Strict === true so older payloads stay quiet.
+  if (p.fast_mode === true) flags.push(paint('fast', C.yellow + C.bold));
+  if (p.output_style && p.output_style.name && p.output_style.name !== 'default') {
+    flags.push(paint(p.output_style.name, C.magenta));
+  }
+  if (flags.length) parts.push(flags.join(' '));
 
   // 3) Project basename + git branch/dirty
   const cwd = (p.workspace && p.workspace.current_dir) || p.cwd || '';

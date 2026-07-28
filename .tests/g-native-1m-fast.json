@@ -1,0 +1,1 @@
+{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"effort":{"level":"xhigh"},"thinking":{"enabled":true},"fast_mode":true,"cwd":"D:\\Projects\\demo\\opus5-fast","workspace":{"current_dir":"D:\\Projects\\demo\\opus5-fast"},"context_window":{"used_percentage":30},"exceeds_200k_tokens":false}
