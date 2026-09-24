@@ -271,9 +271,15 @@ function toStats(c) {
 // Git branch + dirty flag (not in stdin). Array args = no shell injection.
 // Returns '' when cwd is not a repo or git is unavailable.
 // ---------------------------------------------------------------------------
+// GIT_OPTIONAL_LOCKS=0: `git status` otherwise takes the repo's index.lock to write
+// back refreshed stat data, and the 1500 ms timeout kills git (the REAL git.exe
+// under Git Bash) -- a kill inside that window leaves an EMPTY stale index.lock
+// that blocks every later commit in the repo (orbitlauncher, 2026-09-24: six in
+// 14 h, reproduced). The flag only skips that optional write; output is unchanged.
 function gitInfo(dir) {
   if (!dir) return '';
-  const opts = { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500, windowsHide: true };
+  const opts = { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500, windowsHide: true,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } };
   try {
     if (execFileSync('git', ['rev-parse', '--is-inside-work-tree'], opts).toString().trim() !== 'true') return '';
     let branch = '';
