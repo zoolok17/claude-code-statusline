@@ -340,6 +340,133 @@ function currentTip(nowMs) { return TIPS[Math.floor(nowMs / TIP_PERIOD_MS) % TIP
 // the week has passed. "faster" means the allowance would run out before the
 // reset if use continues like this; "room" means there is slack. Within 5 points
 // it is "even".
+// ---------------------------------------------------------------------------
+// Armed loops (scheduled prompts made with CronCreate). Claude Code keeps
+// session-only jobs in memory, so we rebuild the list from THIS session's
+// transcript: each CronCreate call (its prompt gives the label), its result (job
+// id, readable schedule, durable or not) and each CronDelete. A job expires 7 days
+// after it was made, so the render keeps recurring jobs younger than that. A job
+// made before a /resume is still listed: observed 2026-10-14, a job created before
+// the current Claude Code process started was still armed in that resumed session
+// (CronList showed it). A brand-new session has a new transcript, so jobs of an
+// earlier session never appear. One-shot jobs are left out: they are gone once
+// they fire, which the transcript does not record.
+// The scan has its own small cache (byte offset + jobs). On the first run it does
+// not read the whole transcript (they can be gigabytes): it binary-searches the
+// file for the first line of the last 7 days and scans from there, in chunks,
+// parsing only lines that mention a Cron tool.
+// ---------------------------------------------------------------------------
+const JOB_LIFE_MS = 7 * 24 * 3600 * 1000;
+const CHUNK = 8 * 1024 * 1024;
+
+function lineTimeAt(fd, size, pos) {
+  // Timestamp of the first complete, timestamped line at or after byte `pos`.
+  const len = Math.min(256 * 1024, size - pos);
+  if (len <= 0) return null;
+  const buf = Buffer.alloc(len);
+  fs.readSync(fd, buf, 0, len, pos);
+  const lines = buf.toString('utf8').split('\n');
+  for (let i = pos === 0 ? 0 : 1; i < lines.length - 1; i++) {
+    const m = lines[i].match(/"timestamp":"([^"]+)"/);
+    if (m) { const t = Date.parse(m[1]); if (!Number.isNaN(t)) return t; }
+  }
+  return null;
+}
+
+function offsetForTime(fd, size, targetMs) {
+  let lo = 0, hi = size;
+  while (hi - lo > 1024 * 1024) {
+    const mid = Math.floor((lo + hi) / 2);
+    const t = lineTimeAt(fd, size, mid);
+    if (t === null || t >= targetMs) hi = mid; else lo = mid;
+  }
+  return lo; // a little before the first line at targetMs; the scan skips the partial line
+}
+
+function cronLabel(prompt) {
+  const s = String(prompt || '').replace(/\s+/g, ' ').trim();
+  const cut = s.split(/[(.:]/)[0].trim();
+  return (cut || s).slice(0, 24);
+}
+
+function armedLoops(p, nowMs) {
+  const tp = p.transcript_path;
+  if (!tp) return [];
+  let size;
+  try { size = fs.statSync(tp).size; } catch (_) { return []; }
+  const sid = String(p.session_id || path.basename(tp)).replace(/[^A-Za-z0-9._-]/g, '_');
+  const cacheFile = path.join(os.tmpdir(), `cc-statusline-loops-${sid}.json`);
+
+  let cache = null;
+  try {
+    const c = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    if (c && c.v === 1 && typeof c.offset === 'number' && c.offset <= size) cache = c;
+  } catch (_) {}
+
+  if (!cache || cache.offset < size) {
+    try {
+      const fd = fs.openSync(tp, 'r');
+      try {
+        if (!cache) {
+          const from = nowMs - JOB_LIFE_MS - 60 * 1000;
+          cache = { v: 1, offset: offsetForTime(fd, size, from), skipFirst: true, pending: {}, jobs: {} };
+        }
+        let pos = cache.offset, carry = '';
+        let skip = cache.skipFirst === true;
+        while (pos < size) {
+          const len = Math.min(CHUNK, size - pos);
+          const buf = Buffer.alloc(len);
+          fs.readSync(fd, buf, 0, len, pos);
+          pos += len;
+          const text = carry + buf.toString('utf8');
+          const lines = text.split('\n');
+          carry = lines.pop(); // incomplete last line waits for the next chunk/render
+          for (const line of lines) {
+            if (skip) { skip = false; continue; } // partial line where the search landed
+            if (line.indexOf('Cron') < 0 && line.indexOf('humanSchedule') < 0) continue;
+            let o; try { o = JSON.parse(line); } catch (_) { continue; }
+            const content = o && o.message && Array.isArray(o.message.content) ? o.message.content : [];
+            if (o.type === 'assistant') {
+              for (const c of content) {
+                if (!c || c.type !== 'tool_use') continue;
+                if (c.name === 'CronCreate' && c.input) cache.pending[c.id] = cronLabel(c.input.prompt);
+                if (c.name === 'CronDelete' && c.input && c.input.id) delete cache.jobs[c.input.id];
+              }
+            } else if (o.type === 'user' && o.toolUseResult && o.toolUseResult.humanSchedule && o.toolUseResult.id) {
+              const r = o.toolUseResult;
+              const res = content.find((c) => c && c.type === 'tool_result');
+              const tuid = res && res.tool_use_id;
+              cache.jobs[r.id] = {
+                label: (tuid && cache.pending[tuid]) || '',
+                sched: String(r.humanSchedule),
+                recurring: r.recurring !== false,
+                durable: r.durable === true,
+                created: Date.parse(o.timestamp) || nowMs,
+              };
+              if (tuid) delete cache.pending[tuid];
+            }
+          }
+        }
+        cache.offset = size - Buffer.byteLength(carry, 'utf8');
+        cache.skipFirst = false;
+      } finally { fs.closeSync(fd); }
+      try { fs.writeFileSync(cacheFile, JSON.stringify(cache)); } catch (_) {}
+    } catch (_) { if (!cache) return []; }
+  }
+
+  return Object.entries(cache.jobs)
+    .map(([id, j]) => ({ id, ...j }))
+    .filter((j) => j.recurring)
+    .filter((j) => j.durable || j.created + JOB_LIFE_MS > nowMs)
+    .sort((a, b) => a.created - b.created);
+}
+
+function fmtLeft(ms) {
+  if (ms <= 0) return 'expired';
+  const h = Math.floor(ms / 3600000);
+  return h >= 24 ? `${Math.floor(h / 24)}d left` : `${h}h left`;
+}
+
 const WEEK_SEC = 7 * 24 * 3600;
 function weekPace(usedPct, resetsAt, nowMs) {
   if (typeof usedPct !== 'number' || typeof resetsAt !== 'number' || resetsAt <= 0) return null;
@@ -494,8 +621,14 @@ function main() {
     if (segs.length) parts.push(paint('usage limits used', C.gray) + ' ' + segs.join(SEP));
   }
 
-  // Line 2: reminders for talking to the model.
-  const reminders = paint('Grice: ', C.gray) + paint(GRICE, C.dim) + SEP +
+  // Line 2: armed loops (scheduled prompts), then reminders for talking to the model.
+  const loops = armedLoops(p, nowMs).map((j) => {
+    const left = j.durable ? '' : fmtLeft(j.created + JOB_LIFE_MS - nowMs);
+    const lc = left && !left.endsWith('d left') ? C.red : C.dim; // under a day: renew soon
+    return paint(j.label || j.id, C.magenta) + ' ' + paint(j.sched, C.gray) + (left ? ' ' + paint(`(${left})`, lc) : '');
+  });
+  const reminders = (loops.length ? paint('loops: ', C.gray) + loops.join(SEP) + SEP : '') +
+    paint('Grice: ', C.gray) + paint(GRICE, C.dim) + SEP +
     paint('tip: ', C.gray) + paint(currentTip(nowMs), C.dim);
 
   if (process.env.CC_STATUSLINE_ONE_LINE) {

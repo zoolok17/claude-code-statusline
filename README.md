@@ -8,14 +8,15 @@ command prints to **stdout** becomes the bar at the bottom of the terminal. It r
 locally and consumes **no API tokens**.
 
 `statusline.js` reads that payload (plus the session transcript as a fallback) and renders
-two lines: the working facts (model, context, cost, account, usage limits) and a short reminder
-for talking to the model (Grice's four maxims and one rotating tip).
+two lines: the working facts (model, context, cost, account, usage limits) and a second line with
+the session's armed loops plus a short reminder for talking to the model (Grice's four maxims and one
+rotating tip).
 
 ## What it shows
 
 ```
 Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓▓▓▓▓▓▓░░ 77% ctx (770k/1000k) compact soon · API tokens 3.5M/$8.57 13h2m (2d3h) · acct Ximedes · usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓▓▓░░ 73% / Sat 03:00 (57% of week gone: faster)
-Grice: Quantity · Quality · Relation · Manner · tip: say what "done" looks like
+loops: COMPACT-PREP Every 2 hours at :07 (4d left) · SITREP TICK 13,43 * * * * (6d left) · Grice: Quantity · Quality · Relation · Manner · tip: say what "done" looks like
 ```
 
 | Segment | Meaning | Source |
@@ -27,7 +28,8 @@ Grice: Quantity · Quality · Relation · Manner · tip: say what "done" looks l
 | `API tokens 3.5M/$8.57 13h2m (2d3h)` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · **in-use time** (`elapsed` in parens) | transcript (tokens + timer) + `cost.total_cost_usd` (stdin) |
 | `acct Ximedes` | Which Claude account this window spends: a short label from the account's e-mail domain only (`gmail.com` → `Gmail`), useful when you rotate subscriptions | `oauthAccount.emailAddress` in Claude Code's own `~/.claude.json` (domain only) |
 | `usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓▓▓░░ 73% / Sat 03:00 (57% of week gone: faster)` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) and, after the `/`, the local time the window resets (weekday shown when not today). The weekly window also shows its **pace**: how much of the week has passed, and `faster` (yellow; red when more than 15 points ahead) if the allowance is being used faster than the week passes, `room` if slower, `even` within 5 points | `rate_limits.*` (stdin) |
-| line 2: `Grice: Quantity · Quality · Relation · Manner · tip: …` | A reminder of Grice's four maxims of cooperative conversation (say enough but not too much; only what is true; stay relevant; be clear) and one short prompting tip that changes every five minutes | built in |
+| line 2: `loops: SITREP TICK 13,43 * * * * (6d left) · …` | The **armed loops** of this session (recurring prompts scheduled with `/loop` or `CronCreate`): a label from the first words of the prompt, the schedule, and how long until the job expires (session-only jobs expire 7 days after they were made; under a day shows in red, time to renew) | this session's transcript (`CronCreate` / `CronDelete` calls and results) |
+| then `Grice: Quantity · Quality · Relation · Manner · tip: …` | A reminder of Grice's four maxims of cooperative conversation (say enough but not too much; only what is true; stay relevant; be clear) and one short prompting tip that changes every five minutes | built in |
 
 Non-`default` output styles also appear (next to the effort flags). `fast` shows up there only
 while `/fast` is on, in yellow rather than the usual magenta: it is the same model at a premium
@@ -116,6 +118,14 @@ session, not just one project.
   passed; it assumes the window is exactly seven days long, so treat it as a guide, not a forecast.
 - **The tip rotates on refresh** — the status line runs after each message; add `"refreshInterval"`
   (see *Customize*) if you want the tip to change while the window is idle.
+- **Armed loops** — Claude Code keeps session-only scheduled jobs in memory and writes no state file, so
+  the list is rebuilt from this session's transcript: every `CronCreate` call and result, minus every
+  `CronDelete`, minus jobs older than seven days (when they expire). One-shot jobs are left out (the
+  transcript does not record when they fire). A resumed session re-arms its jobs (seen in practice),
+  so jobs made before a `/resume` are still listed; a new session has a new transcript and starts
+  empty. The scan keeps its own byte-offset cache in the temp folder, and on the first run it
+  binary-searches the transcript for the last seven days instead of reading all of it (a long session's
+  transcript can be gigabytes): about a second once, then only the new lines.
 - **agenttalk capacity snapshots** — agenttalk's `capacity` command reads
   `~/.claude/statusline-last-input.json`, so a Claude worker whose usage teammates should see must
   run with `CC_STATUSLINE_DEBUG=1` (see *Customize*). The status line no longer shows agenttalk team
