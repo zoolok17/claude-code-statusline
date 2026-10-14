@@ -18,14 +18,19 @@
  *
  * Design rules:
  *   - Every field is treated as OPTIONAL; missing data is skipped, never fatal.
- *   - We ALWAYS print exactly one line (a blank line or a non-zero exit blanks
- *     the bar), and the whole thing is wrapped in try/catch.
+ *   - We print one or two non-blank lines (a blank output or a non-zero exit
+ *     blanks the bar), and the whole thing is wrapped in try/catch. Claude Code
+ *     shows each printed line as its own row.
  *   - Verified on this machine: node v24.13.1, Claude Code v2.1.161, against
  *     real 200k and 1M-context transcripts.
  *
- * Fields shown (left -> right):
- *   Model · effort/thinking/fast · project ⚡branch · ctx bar + % + tokens ·
- *   tokens/$cost +added/-removed in-use-time (elapsed) · 5h%/7d% rate limits
+ * Line 1 (left -> right), the working facts:
+ *   Model · effort/thinking/fast · project ⚡branch · ctx bar + % + tokens
+ *   (+ "compact soon" past 70%) · API tokens/$cost in-use-time (elapsed) ·
+ *   account · 5h%/7d% rate limits with reset times and the weekly pace
+ * Line 2, reminders for talking to the model:
+ *   Grice's four maxims · one rotating prompting tip
+ * Set CC_STATUSLINE_ONE_LINE=1 to put line 2 at the end of line 1 instead.
  * The in-use timer is summed from the transcript across every /resume, so it
  * survives restarts (cost.total_duration_ms only covers the current run).
  */
@@ -286,66 +291,64 @@ function gitInfo(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// agenttalk identity (https://github.com/.../agenttalk). When the project is
-// part of an agenttalk team it keeps a small plain-text store at
-// `<root>/.agenttalk/`; we read it DIRECTLY (no spawning the Python CLI on the
-// hot path) to show THIS window's own agent — name, role, the group(s)/roster
-// it belongs to, and its own waiting / open-thread status. Returns null when the
-// project has no such store — i.e. the segment is silent for every non-agenttalk
-// project.
+// Which Claude account this window is logged into. The stdin payload carries no
+// account field, so we read Claude Code's own config file (~/.claude.json, or
+// the one under CLAUDE_CONFIG_DIR) and show ONLY a short label made from the
+// e-mail domain ("ximedes.com" -> "Ximedes", "gmail.com" -> "Gmail"). Never the
+// full address, never anything from the credentials file. Useful when several
+// subscriptions are rotated: you see which one this window is spending.
 // ---------------------------------------------------------------------------
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
 
-function findAgenttalkDir(startDir) {
-  let dir = startDir;
-  for (let i = 0; i < 6 && dir; i++) { // walk up to the repo/store root
-    const at = path.join(dir, '.agenttalk');
-    try { if (fs.statSync(path.join(at, 'config.json')).isFile()) return at; } catch (_) {}
-    const parent = path.dirname(dir);
-    if (parent === dir) break; // reached filesystem root
-    dir = parent;
+function accountLabel() {
+  const candidates = [];
+  if (process.env.CLAUDE_CONFIG_DIR) candidates.push(path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json'));
+  candidates.push(path.join(os.homedir(), '.claude.json'));
+  for (const file of candidates) {
+    const cfg = readJson(file);
+    const email = cfg && cfg.oauthAccount && cfg.oauthAccount.emailAddress;
+    if (typeof email === 'string' && email.includes('@')) {
+      const first = email.split('@').pop().split('.')[0] || '';
+      if (first) return first.charAt(0).toUpperCase() + first.slice(1);
+    }
   }
-  return null;
+  return '';
 }
 
-function agenttalkInfo(cwd) {
-  if (!cwd) return null;
-  const root = findAgenttalkDir(cwd);
-  if (!root) return null; // not an agenttalk project -> segment omitted
-  const cfg = readJson(path.join(root, 'config.json'));
-  const agents = cfg && Array.isArray(cfg.agents) ? cfg.agents.filter((a) => typeof a === 'string') : [];
-  if (!agents.length) return null;
-  // Identity MUST match how agenttalk itself resolves it: $AGENTTALK_SELF. There
-  // is no other reliable per-window signal (the store keys everything by agent
-  // name, not by Claude session), so we never guess a name — defaulting to
-  // "claude" would mislabel a second Claude window such as "claude-reviewer". A
-  // single-agent roster is unambiguous; with several, self stays unknown (the
-  // segment renders `?/N`) until that window exports AGENTTALK_SELF.
-  const self = process.env.AGENTTALK_SELF || (agents.length === 1 ? agents[0] : null);
-  const roles = cfg && cfg.roles && typeof cfg.roles === 'object' ? cfg.roles : {};
-  const groupsCfg = cfg && cfg.groups && typeof cfg.groups === 'object' ? cfg.groups : {};
+// ---------------------------------------------------------------------------
+// Line 2: reminders for talking to the model. Grice's cooperative maxims say
+// what a good conversation partner does (enough but not too much; only what is
+// true; relevant; clear). The model is trained to be exactly that partner, so
+// what you leave unsaid it fills with the most typical reading. One short tip
+// rotates every five minutes so it stays noticeable.
+// ---------------------------------------------------------------------------
+const GRICE = 'Quantity · Quality · Relation · Manner';
+const TIPS = [
+  'say what "done" looks like',
+  'give the purpose, not just the task',
+  'ask it to restate the task first',
+  'ask for the opposite view',
+  'name the limits and what not to touch',
+  'ask what it is unsure about',
+  'one decision per message',
+  'invite far-off ideas when you want them',
+];
+const TIP_PERIOD_MS = 5 * 60 * 1000;
+function currentTip(nowMs) { return TIPS[Math.floor(nowMs / TIP_PERIOD_MS) % TIPS.length]; }
 
-  let role = null;
-  const groups = [];
-  let waiting = false, openThreads = 0;
-  if (self) {
-    if (typeof roles[self] === 'string') role = roles[self];        // config.roles[self]
-    for (const [g, members] of Object.entries(groupsCfg)) {         // self's named group(s)
-      if (Array.isArray(members) && members.includes(self)) groups.push(g);
-    }
-    const stateDir = path.join(root, 'state');
-    const now = Date.now();
-    const w = readJson(path.join(stateDir, `${self}.waiting`));      // blocked in an `agenttalk wait`?
-    if (w) {
-      const dl = typeof w.deadline_epoch === 'number' ? w.deadline_epoch * 1000 : null;
-      waiting = dl === null || dl > now;
-    }
-    const ts = readJson(path.join(stateDir, `${self}.threadstate.json`)); // tracked threads still open
-    if (ts && typeof ts === 'object') {
-      for (const k of Object.keys(ts)) if (ts[k] && ts[k].closed === false) openThreads++;
-    }
-  }
-  return { self, role, groups, size: agents.length, waiting, openThreads };
+// Weekly pace: how much of the 7-day allowance is used compared with how much of
+// the week has passed. "faster" means the allowance would run out before the
+// reset if use continues like this; "room" means there is slack. Within 5 points
+// it is "even".
+const WEEK_SEC = 7 * 24 * 3600;
+function weekPace(usedPct, resetsAt, nowMs) {
+  if (typeof usedPct !== 'number' || typeof resetsAt !== 'number' || resetsAt <= 0) return null;
+  const remaining = resetsAt - nowMs / 1000;
+  if (remaining <= 0 || remaining > WEEK_SEC) return null;
+  const gone = Math.max(0, Math.min(100, 100 * (1 - remaining / WEEK_SEC)));
+  const diff = usedPct - gone;
+  const word = diff > 5 ? 'faster' : diff < -5 ? 'room' : 'even';
+  return { gone, word, diff };
 }
 
 // ---------------------------------------------------------------------------
@@ -441,12 +444,16 @@ function main() {
   const used = usedTokens(p, limit);
   const pctUsed = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
   const col = usageColor(pctUsed);
+  // Past 70% a long conversation gets slow and costly: a short reminder to
+  // compact (or start fresh with a handover note) before it fills up.
+  const hint = pctUsed >= 90 ? paint(' compact now', C.red + C.bold)
+    : pctUsed >= 70 ? paint(' compact soon', C.yellow) : '';
   parts.push(
     `${paint(bar(pctUsed), col)} ${paint(pctUsed.toFixed(0) + '% ctx', col)} ` +
-    `${paint(`(${fmtK(used)}/${fmtK(limit)})`, C.dim)}`,
+    `${paint(`(${fmtK(used)}/${fmtK(limit)})`, C.dim)}${hint}`,
   );
 
-  // 5) API tokens used this session + their API cost + lines +/- + duration
+  // 5) API tokens used this session + their API cost + duration
   const seg = [];
   const stats = sessionStats(p);
   const tokTotal = stats ? stats.tokenTotal : null;
@@ -456,46 +463,46 @@ function main() {
     const cost = costUsd !== null ? '$' + costUsd.toFixed(2) : '$?';
     seg.push(paint(`API tokens ${nr}/${cost}`, C.green)); // cumulative billed tokens / pay-as-you-go cost
   }
-  if (p.cost) {
-    const add = p.cost.total_lines_added || 0, del = p.cost.total_lines_removed || 0;
-    if (add || del) seg.push(`${paint('+' + add, C.green)}${paint('/-' + del, C.red)}`);
-  }
   const dur = sessionDurationStr(stats, p.cost); // active in-use time (+ elapsed), accumulated across resumes
   if (dur) seg.push(paint(dur, C.gray));
   if (seg.length) parts.push(seg.join(' '));
 
-  // 5b) agenttalk: THIS window's own agent — name (role) @group(s)/roster-size,
-  // plus its own status. Silent for every project that isn't an agenttalk team.
-  const team = agenttalkInfo(cwd);
-  if (team) {
-    let body;
-    if (team.self) {
-      body = paint(team.self, C.cyan + C.bold);
-      if (team.role) body += paint(` (${team.role})`, C.gray);
-      body += ' ' + paint(`@${team.groups.length ? team.groups.join(',') : '-'}/${team.size}`, C.dim);
-      if (team.waiting) body += ' ' + paint('⏳', C.yellow);                  // blocked in a wait
-      if (team.openThreads > 0) body += ' ' + paint('✉' + team.openThreads, C.magenta); // open threads
-    } else {
-      body = paint(`?/${team.size}`, C.dim); // identity unresolved in a multi-agent roster — set AGENTTALK_SELF
-    }
-    parts.push(paint('🛰', C.gray) + ' ' + body);
-  }
+  // 6) The account this window spends (label from the e-mail domain only).
+  const acct = accountLabel();
+  if (acct) parts.push(paint('acct ' + acct, C.cyan));
 
-  // 6) Real server-side rate-limit windows (Pro/Max, after the first API call)
+  // 7) Real server-side rate-limit windows (Pro/Max, after the first API call),
+  // each with its reset time; the 7-day window also shows the weekly pace.
+  const nowMs = Date.now();
   if (p.rate_limits) {
-    const win = (label, w) => {
+    const win = (label, w, withPace) => {
       if (!w || typeof w.used_percentage !== 'number') return null;
       const u = Math.max(0, Math.min(100, w.used_percentage)); // fraction of the limit consumed
       const c = usageColor(u);                                 // green low -> red high (higher used = worse)
       const reset = fmtReset(w.resets_at);                     // when this window resets (local time)
-      return `${label} ${paint(bar(u, 6), c)} ${paint(Math.round(u) + '%', c)}` +
-             (reset ? ` ${paint('/ ' + reset, C.dim)}` : '');
+      let s = `${label} ${paint(bar(u, 6), c)} ${paint(Math.round(u) + '%', c)}` +
+              (reset ? ` ${paint('/ ' + reset, C.dim)}` : '');
+      const pace = withPace ? weekPace(u, w.resets_at, nowMs) : null;
+      if (pace) {
+        const pc = pace.word === 'faster' ? (pace.diff > 15 ? C.red : C.yellow)
+          : pace.word === 'room' ? C.green : C.gray;
+        s += ' ' + paint(`(${Math.round(pace.gone)}% of week gone: `, C.dim) + paint(pace.word, pc) + paint(')', C.dim);
+      }
+      return s;
     };
-    const segs = [win('5h', p.rate_limits.five_hour), win('7d', p.rate_limits.seven_day)].filter(Boolean);
+    const segs = [win('5h', p.rate_limits.five_hour, false), win('7d', p.rate_limits.seven_day, true)].filter(Boolean);
     if (segs.length) parts.push(paint('usage limits used', C.gray) + ' ' + segs.join(SEP));
   }
 
-  process.stdout.write(parts.join(SEP) + '\n');
+  // Line 2: reminders for talking to the model.
+  const reminders = paint('Grice: ', C.gray) + paint(GRICE, C.dim) + SEP +
+    paint('tip: ', C.gray) + paint(currentTip(nowMs), C.dim);
+
+  if (process.env.CC_STATUSLINE_ONE_LINE) {
+    process.stdout.write(parts.join(SEP) + SEP + reminders + '\n');
+  } else {
+    process.stdout.write(parts.join(SEP) + '\n' + reminders + '\n');
+  }
 }
 
 try { main(); }
