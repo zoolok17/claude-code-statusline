@@ -351,19 +351,22 @@ function currentTip(nowMs) { return TIPS[Math.floor(nowMs / TIP_PERIOD_MS) % TIP
 // session-only jobs in memory, so we rebuild the list from THIS session's
 // transcript: each CronCreate call (its prompt gives the label), its result (job
 // id, readable schedule, durable or not) and each CronDelete. A job expires 7 days
-// after it was made, so the render keeps recurring jobs younger than that. A job
-// made before a /resume is still listed: observed 2026-10-14, a job created before
-// the current Claude Code process started was still armed in that resumed session
-// (CronList showed it). A brand-new session has a new transcript, so jobs of an
-// earlier session never appear. One-shot jobs are left out: they are gone once
-// they fire, which the transcript does not record.
+// after it was made, so the render keeps recurring jobs younger than that. A brand-
+// new session has a new transcript, so jobs of an earlier session never appear.
+// One-shot jobs are left out.
+// Resuming a session only sometimes re-arms its session-only jobs (both outcomes
+// seen in 2.1.27x-2.1.300 transcripts), and a re-armed job fires straight away. So
+// once Claude Code exits (it writes a 'cost-state' line), a session-only job counts
+// again only when it fires (scheduled_task_fire names it) or CronList lists it. A
+// CronList result is the whole truth and replaces the list.
 // The scan has its own small cache (byte offset + jobs). On the first run it does
 // not read the whole transcript (they can be gigabytes): it binary-searches the
 // file for the first line of the last 7 days and scans from there, in chunks,
-// parsing only lines that mention a Cron tool.
+// parsing only lines that can matter (CRON_HINTS).
 // ---------------------------------------------------------------------------
 const JOB_LIFE_MS = 7 * 24 * 3600 * 1000;
 const CHUNK = 8 * 1024 * 1024;
+const CRON_HINTS = ['Cron', 'humanSchedule', '"jobs":[', '"cost-state"', 'scheduled_task_fire'];
 
 function lineTimeAt(fd, size, pos) {
   // Timestamp of the first complete, timestamped line at or after byte `pos`.
@@ -406,7 +409,7 @@ function armedLoops(p, nowMs) {
   let cache = null;
   try {
     const c = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    if (c && c.v === 1 && typeof c.offset === 'number' && c.offset <= size) cache = c;
+    if (c && c.v === 2 && typeof c.offset === 'number' && c.offset <= size) cache = c;
   } catch (_) {}
 
   if (!cache || cache.offset < size) {
@@ -414,8 +417,8 @@ function armedLoops(p, nowMs) {
       const fd = fs.openSync(tp, 'r');
       try {
         if (!cache) {
-          const from = nowMs - JOB_LIFE_MS - 60 * 1000;
-          cache = { v: 1, offset: offsetForTime(fd, size, from), skipFirst: true, pending: {}, jobs: {} };
+          const start = offsetForTime(fd, size, nowMs - JOB_LIFE_MS - 60 * 1000);
+          cache = { v: 2, offset: start, skipFirst: start > 0, pending: {}, lists: {}, jobs: {} };
         }
         let pos = cache.offset, carry = '';
         let skip = cache.skipFirst === true;
@@ -429,27 +432,56 @@ function armedLoops(p, nowMs) {
           carry = lines.pop(); // incomplete last line waits for the next chunk/render
           for (const line of lines) {
             if (skip) { skip = false; continue; } // partial line where the search landed
-            if (line.indexOf('Cron') < 0 && line.indexOf('humanSchedule') < 0) continue;
+            if (!CRON_HINTS.some((h) => line.indexOf(h) >= 0)) continue;
             let o; try { o = JSON.parse(line); } catch (_) { continue; }
-            const content = o && o.message && Array.isArray(o.message.content) ? o.message.content : [];
+            if (!o) continue;
+            if (o.type === 'cost-state') { // Claude Code exited
+              for (const j of Object.values(cache.jobs)) if (!j.durable) j.live = false;
+              continue;
+            }
+            if (o.subtype === 'scheduled_task_fire') {
+              if (o.taskId && cache.jobs[o.taskId]) cache.jobs[o.taskId].live = true;
+              continue;
+            }
+            const content = o.message && Array.isArray(o.message.content) ? o.message.content : [];
             if (o.type === 'assistant') {
               for (const c of content) {
                 if (!c || c.type !== 'tool_use') continue;
                 if (c.name === 'CronCreate' && c.input) cache.pending[c.id] = cronLabel(c.input.prompt);
+                if (c.name === 'CronList') cache.lists[c.id] = true;
                 if (c.name === 'CronDelete' && c.input && c.input.id) delete cache.jobs[c.input.id];
               }
-            } else if (o.type === 'user' && o.toolUseResult && o.toolUseResult.humanSchedule && o.toolUseResult.id) {
+            } else if (o.type === 'user' && o.toolUseResult) {
               const r = o.toolUseResult;
               const res = content.find((c) => c && c.type === 'tool_result');
               const tuid = res && res.tool_use_id;
-              cache.jobs[r.id] = {
-                label: (tuid && cache.pending[tuid]) || '',
-                sched: String(r.humanSchedule),
-                recurring: r.recurring !== false,
-                durable: r.durable === true,
-                created: Date.parse(o.timestamp) || nowMs,
-              };
-              if (tuid) delete cache.pending[tuid];
+              const created = Date.parse(o.timestamp) || nowMs;
+              if (r.humanSchedule && r.id) {
+                cache.jobs[r.id] = {
+                  label: (tuid && cache.pending[tuid]) || '',
+                  sched: String(r.humanSchedule),
+                  recurring: r.recurring !== false,
+                  durable: r.durable === true,
+                  created,
+                  live: true,
+                };
+                if (tuid) delete cache.pending[tuid];
+              } else if (Array.isArray(r.jobs) && tuid && cache.lists[tuid]) {
+                const jobs = {};
+                for (const j of r.jobs) {
+                  const known = cache.jobs[j.id];
+                  jobs[j.id] = {
+                    label: (known && known.label) || cronLabel(j.prompt),
+                    sched: String(j.humanSchedule || j.cron),
+                    recurring: j.recurring === true, // one-shot jobs omit it here
+                    durable: j.durable === true,
+                    created: known ? known.created : created, // made before the scanned stretch: best guess
+                    live: true,
+                  };
+                }
+                cache.jobs = jobs;
+                delete cache.lists[tuid];
+              }
             }
           }
         }
@@ -462,7 +494,7 @@ function armedLoops(p, nowMs) {
 
   return Object.entries(cache.jobs)
     .map(([id, j]) => ({ id, ...j }))
-    .filter((j) => j.recurring)
+    .filter((j) => j.recurring && j.live)
     .filter((j) => j.durable || j.created + JOB_LIFE_MS > nowMs)
     .sort((a, b) => a.created - b.created);
 }
