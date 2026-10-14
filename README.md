@@ -8,12 +8,15 @@ command prints to **stdout** becomes the bar at the bottom of the terminal. It r
 locally and consumes **no API tokens**.
 
 `statusline.js` reads that payload (plus the session transcript as a fallback) and renders
-one line.
+two lines: the working facts (model, context, cost, account, usage limits) and a second line with
+the session's armed loops plus a short reminder for talking to the model (Grice's four maxims and one
+rotating tip).
 
 ## What it shows
 
 ```
-Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░░░░░░ 21% ctx (206k/1000k) · API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h) · usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓░░░░ 41% / Tue 09:00
+Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓▓▓▓▓▓▓░░ 77% ctx (770k/1000k) compact soon · API tokens 3.5M/$8.57 13h2m (2d3h) · acct Ximedes · usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓▓▓░░ 73% / Sat 03:00 (57% of week gone: faster)
+loops: COMPACT-PREP Every 2 hours at :07 (4d left) · SITREP TICK 13,43 * * * * (6d left) · Grice: Quantity · Quality · Relation · Manner · tip: say what "done" looks like
 ```
 
 | Segment | Meaning | Source |
@@ -21,16 +24,17 @@ Opus 4.8 (1M context) · e:xhigh think · godot-mcp ⚡main* · ▓▓░░░�
 | `Opus 4.8 (1M context)` | Model in use | `model.display_name` (stdin) |
 | `e:xhigh think fast` | Effort level + extended thinking on + fast mode | `effort.level`, `thinking.enabled`, `fast_mode` (stdin) |
 | `godot-mcp ⚡main*` | Project folder + git branch (`*` = uncommitted changes) | `workspace.current_dir` + `git` |
-| `▓▓░░░░░░░░ 21% ctx (206k/1000k)` | Context **used** % — bar and number both rise as context fills (green→yellow→red) + tokens used / window | `context_window` (stdin) → transcript fallback |
-| `API tokens 3.5M/$8.57 +156/-23 13h2m (2d3h)` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · lines added/removed by edits · **in-use time** (`elapsed` in parens) | transcript (tokens + timer) + `cost.total_cost_usd` (stdin) |
-| `usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓░░░░ 41% / Tue 09:00` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) and, after the `/`, the local time the window resets (weekday shown when not today) | `rate_limits.*` (stdin) |
-| `🛰 claude-reviewer (reviewer) @reviewers/9 ✉2` | **[agenttalk](https://github.com/zoolok17/agenttalk) identity** — *only* in a project with a `.agenttalk/` store: **this window's own agent** — name (`AGENTTALK_SELF`), role, and the group(s) + total roster size it belongs to (`@group/N`), plus `⏳` (blocked in a `wait`) / `✉N` (open threads). Shows `?/N` when identity is unset in a multi-agent roster | `.agenttalk/` store (local files) |
+| `▓▓▓▓▓▓▓▓░░ 77% ctx (770k/1000k) compact soon` | Context **used** % — bar and number both rise as context fills (green→yellow→red) + tokens used / window. Past 70% a `compact soon` reminder (past 90% `compact now`): a long conversation gets slower and costlier with every turn | `context_window` (stdin) → transcript fallback |
+| `API tokens 3.5M/$8.57 13h2m (2d3h)` | Total tokens billed this session (input+output+cache, deduped & summed from the transcript) `/` their equivalent pay-as-you-go **API cost** (not billed on a subscription) · **in-use time** (`elapsed` in parens) | transcript (tokens + timer) + `cost.total_cost_usd` (stdin) |
+| `acct Ximedes` | Which Claude account this window spends: a short label from the account's e-mail domain only (`gmail.com` → `Gmail`), useful when you rotate subscriptions | `oauthAccount.emailAddress` in Claude Code's own `~/.claude.json` (domain only) |
+| `usage limits used 5h ▓░░░░░ 24% / 17:00 · 7d ▓▓▓▓░░ 73% / Sat 03:00 (57% of week gone: faster)` | **Real** server-side rate-limit **consumption**, 5-hour & weekly windows, each with a bar (green→red as it fills) and, after the `/`, the local time the window resets (weekday shown when not today). The weekly window also shows its **pace**: how much of the week has passed, and `faster` (yellow; red when more than 15 points ahead) if the allowance is being used faster than the week passes, `room` if slower, `even` within 5 points | `rate_limits.*` (stdin) |
+| line 2: `loops: SITREP TICK 13,43 * * * * (6d left) · …` | The **armed loops** of this session (recurring prompts scheduled with `/loop` or `CronCreate`): a label from the first words of the prompt, the schedule, and how long until the job expires (session-only jobs expire 7 days after they were made; under a day shows in red, time to renew) | this session's transcript (`CronCreate` / `CronDelete` calls and results) |
+| then `Grice: Quantity · Quality · Relation · Manner · tip: …` | A reminder of Grice's four maxims of cooperative conversation (say enough but not too much; only what is true; stay relevant; be clear) and one short prompting tip that changes every five minutes | built in |
 
 Non-`default` output styles also appear (next to the effort flags). `fast` shows up there only
 while `/fast` is on, in yellow rather than the usual magenta: it is the same model at a premium
 per-token rate, so the `$` figure further along the bar is not comparable to a standard-speed
-session. The effort flag itself is absent on models that have no effort setting (Haiku), and the
-agenttalk segment is shown only inside an agenttalk team project; every other project never sees it.
+session. The effort flag itself is absent on models that have no effort setting (Haiku).
 
 ## Install
 
@@ -105,22 +109,34 @@ session, not just one project.
   4.6 generation most models are *natively* 1M and carry no marker at all (a real payload here
   read `claude-opus-4-8`, `exceeds_200k_tokens: false`, `context_window_size: 1000000`), so the
   fallback treats Haiku and pre-4.6 models as 200k and everything newer or unrecognised as 1M.
-- **agenttalk identity** — read straight from the project's `.agenttalk/config.json` (no `agenttalk`
-  CLI is spawned), so it costs nothing off-team and just appears on-team. It shows **only this
-  window's own agent** — name from `AGENTTALK_SELF`, role and group(s) from the store's `roles` and
-  `groups` maps, and the total roster size after the `/` (`@group/N`, or `@-/N` when you're in no
-  group). **Set `AGENTTALK_SELF` in each window** (as agenttalk itself requires); when several agents
-  share a project and a window has no `AGENTTALK_SELF`, it can't be identified, so it shows `?/N`
-  rather than mislabel itself (a lone-agent roster is unambiguous). `⏳` = blocked in a `wait`,
-  `✉N` = open threads. The reverse link also matters: agenttalk's `capacity` reads
-  `~/.claude/statusline-last-input.json`, so a Claude worker who wants teammates to see its usage
-  snapshot must run with `CC_STATUSLINE_DEBUG=1` (see *Customize*).
+- **Account label** — read from Claude Code's own `~/.claude.json` (or the one under
+  `CLAUDE_CONFIG_DIR`): only the domain of `oauthAccount.emailAddress` becomes the label, so the full
+  address is never shown and the credentials file is never read. The label is what the window was
+  logged into when Claude Code last wrote that file; after `/login` with another account it changes
+  on the next refresh.
+- **Weekly pace** — compares the 7-day percentage with how much of the 7 days before `resets_at` has
+  passed; it assumes the window is exactly seven days long, so treat it as a guide, not a forecast.
+- **The tip rotates on refresh** — the status line runs after each message; add `"refreshInterval"`
+  (see *Customize*) if you want the tip to change while the window is idle.
+- **Armed loops** — Claude Code keeps session-only scheduled jobs in memory and writes no state file, so
+  the list is rebuilt from this session's transcript: every `CronCreate` call and result, minus every
+  `CronDelete`, minus jobs older than seven days (when they expire). One-shot jobs are left out (the
+  transcript does not record when they fire). A resumed session re-arms its jobs (seen in practice),
+  so jobs made before a `/resume` are still listed; a new session has a new transcript and starts
+  empty. The scan keeps its own byte-offset cache in the temp folder, and on the first run it
+  binary-searches the transcript for the last seven days instead of reading all of it (a long session's
+  transcript can be gigabytes): about a second once, then only the new lines.
+- **agenttalk capacity snapshots** — agenttalk's `capacity` command reads
+  `~/.claude/statusline-last-input.json`, so a Claude worker whose usage teammates should see must
+  run with `CC_STATUSLINE_DEBUG=1` (see *Customize*). The status line no longer shows agenttalk team
+  identities; that segment was for copying messages between agents by hand.
 
 ## Customize
 
 Edit `statusline.js` — changes take effect on the next interaction. The order, colors, and
 which segments appear are all in `main()`. Set the `NO_COLOR` env var to disable ANSI
-colors. Add `"refreshInterval": 5` (seconds) inside the `statusLine` block if you want the
+colors. Set `CC_STATUSLINE_ONE_LINE=1` to put the reminders at the end of line 1 instead of on their own
+line. Add `"refreshInterval": 5` (seconds) inside the `statusLine` block if you want the
 bar to also tick on a timer while idle (e.g. for a clock or live burn rate).
 
 Set `CC_STATUSLINE_DEBUG=1` to dump each run's raw stdin payload to
